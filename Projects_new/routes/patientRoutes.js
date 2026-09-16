@@ -3,6 +3,29 @@ const router = express.Router();
 const db = require("../db");
 const activePatient = require("../activePatient");
 
+// Shared query: latest vitals row for a patient
+function fetchLatestVitals(patientId, callback) {
+  const sql = `
+    SELECT
+      spo2,
+      bpm,
+      temperature,
+      humidity,
+      "Air_Quality" AS aqi,
+      "bodyTemp" AS body_temp,
+      created_at
+    FROM vitals_data
+    WHERE patient_id = $1
+    ORDER BY created_at DESC
+    LIMIT 1
+  `;
+
+  db.query(sql, [patientId], (err, rows) => {
+    if (err) return callback(err);
+    callback(null, rows && rows.length > 0 ? rows[0] : null);
+  });
+}
+
 // ============================================================
 // CREATE NEW PATIENT
 // ============================================================
@@ -11,9 +34,7 @@ router.post("/new", (req, res) => {
   const { name, age, gender, cardid, weight, height, bp, doctorId } = req.body;
 
   if (!name || !age || !gender || !cardid || !weight || !height || !bp) {
-    return res.status(400).json({
-      error: "All patient details are required.",
-    });
+    return res.status(400).json({ error: "All patient details are required." });
   }
 
   if (!doctorId) {
@@ -32,10 +53,7 @@ router.post("/new", (req, res) => {
   db.query(getLastId, (err, result) => {
     if (err) {
       console.error("getLastId error:", err);
-      return res.status(500).json({
-        error: "Database error",
-        detail: err.message,
-      });
+      return res.status(500).json({ error: "Database error", detail: err.message });
     }
 
     let patientId = "P0001";
@@ -47,7 +65,6 @@ router.post("/new", (req, res) => {
       }
     }
 
-    // Quoted identifiers match schema.sql mixed-case columns
     const insertSql = `
       INSERT INTO patient_data
       (
@@ -69,10 +86,7 @@ router.post("/new", (req, res) => {
       (err) => {
         if (err) {
           console.error("insert patient error:", err);
-          return res.status(500).json({
-            error: "Database error",
-            detail: err.message,
-          });
+          return res.status(500).json({ error: "Database error", detail: err.message });
         }
 
         try {
@@ -93,12 +107,7 @@ router.post("/new", (req, res) => {
           });
         }
 
-        res.status(201).json({
-          patientId,
-          name,
-          age,
-          gender,
-        });
+        res.status(201).json({ patientId, name, age, gender });
       }
     );
   });
@@ -128,10 +137,7 @@ router.post("/load", (req, res) => {
   db.query(sql, [patientId], (err, results) => {
     if (err) {
       console.error(err);
-      return res.status(500).json({
-        error: "Database error",
-        detail: err.message,
-      });
+      return res.status(500).json({ error: "Database error", detail: err.message });
     }
 
     if (results.length === 0) {
@@ -156,7 +162,37 @@ router.post("/load", (req, res) => {
 });
 
 // ============================================================
-// GET ACTIVE PATIENT
+// GET LATEST VITALS (last BPM / SpO2 for a patient)
+// ============================================================
+
+router.get("/latest-vitals", (req, res) => {
+  const { patientId } = req.query;
+
+  if (!patientId) {
+    return res.status(400).json({ error: "patientId is required." });
+  }
+
+  fetchLatestVitals(patientId, (err, vitals) => {
+    if (err) {
+      console.error("latest-vitals error:", err);
+      return res.status(500).json({ error: "Database error", detail: err.message });
+    }
+
+    res.json({
+      patientId,
+      spo2: vitals?.spo2 ?? null,
+      bpm: vitals?.bpm ?? null,
+      temperature: vitals?.temperature ?? null,
+      humidity: vitals?.humidity ?? null,
+      aqi: vitals?.aqi ?? null,
+      body_temp: vitals?.body_temp ?? null,
+      created_at: vitals?.created_at ?? null,
+    });
+  });
+});
+
+// ============================================================
+// GET ACTIVE PATIENT (+ last vitals from DB)
 // ============================================================
 
 router.get("/active", (req, res) => {
@@ -176,7 +212,21 @@ router.get("/active", (req, res) => {
     });
   }
 
-  res.json(patient);
+  fetchLatestVitals(patient.patientId, (err, lastVitals) => {
+    if (err) {
+      console.error("active patient vitals error:", err);
+      return res.json({
+        ...patient,
+        lastVitals: null,
+        vitalsError: err.message,
+      });
+    }
+
+    res.json({
+      ...patient,
+      lastVitals,
+    });
+  });
 });
 
 // ============================================================
