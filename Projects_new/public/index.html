@@ -2324,6 +2324,7 @@
                     });
                     ecgChart.update('none');
                 } else if (topic === 'patient/data') {
+                    lasMqttAt = Date.now();
                     updateCards(data);
                     updateSpO2Chart(data.spo2);
                     updateEnvironmentChart(data.temperature, data.humidity);
@@ -2455,30 +2456,112 @@
             document.getElementById('dash-remark').textContent = '—';
         };
 
-        async function loadActivePatient() {
-            const doctorId = sessionStorage.getItem('doctorId');
-            if (!doctorId) {
-                document.getElementById('dash-patient-name').textContent = 'Patient Name: —';
-                document.getElementById('dash-patient-age').textContent = 'Patient Age: —';
-                document.getElementById('dash-patient-id').textContent = 'Patient ID: —';
-                return;
-            }
+/** Apply last DB vitals to dashboard info cards */
+function applyLastVitals(v) {
+  if (!v) return;
 
-            try {
-                const res = await fetch(`/api/patient/active?doctorId=${doctorId}`);
-                if (!res.ok) throw new Error('No active patient');
-                const p = await res.json();
-                document.getElementById('dash-patient-name').textContent = 'Patient Name: ' + (p.name || '—');
-                document.getElementById('dash-patient-age').textContent = 'Patient Age: ' + (p.age || '—');
-                document.getElementById('dash-patient-id').textContent = 'Patient ID: ' + (p.patientId || '—');
-                sessionStorage.setItem('patientId', p.patientId);
-            } catch (err) {
-                console.log(err);
-                document.getElementById('dash-patient-name').textContent = 'Patient Name: —';
-                document.getElementById('dash-patient-age').textContent = 'Patient Age: —';
-                document.getElementById('dash-patient-id').textContent = 'Patient ID: —';
-            }
-        }
+  if (v.spo2 != null && v.spo2 !== "") {
+    document.getElementById("spo2-value").textContent = v.spo2;
+  }
+  if (v.bpm != null && v.bpm !== "") {
+    document.getElementById("bpm-value").textContent = v.bpm;
+  }
+  if (v.temperature != null && v.temperature !== "") {
+    document.getElementById("roomtemp-value").textContent = v.temperature;
+  }
+  if (v.humidity != null && v.humidity !== "") {
+    document.getElementById("humidity-value").textContent = v.humidity;
+  }
+  if (v.aqi != null && v.aqi !== "") {
+    document.getElementById("aq-value").textContent = v.aqi;
+  }
+  if (v.body_temp != null && v.body_temp !== "") {
+    document.getElementById("temp-value").textContent = v.body_temp;
+  }
+
+  const r = document.getElementById("dash-remark");
+  if (r && v.bpm != null && v.bpm !== "") {
+    const bpmNum = Number(v.bpm);
+    if (!Number.isNaN(bpmNum)) {
+      r.innerHTML =
+        bpmNum >= 60 && bpmNum <= 100
+          ? '❤️ <span class="healthy">Healthy</span>'
+          : "⚠️ Abnormal Heart Rate";
+    }
+  }
+}
+
+/** Fetch last vitals by patientId (works even if /active has no memory on Vercel) */
+async function fetchLatestVitalsForPatient(patientId) {
+  if (!patientId) return null;
+  try {
+    const res = await fetch(
+      `/api/patient/latest-vitals?patientId=${encodeURIComponent(patientId)}`
+    );
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (e) {
+    console.warn("latest-vitals fetch failed", e);
+    return null;
+  }
+}
+
+async function loadActivePatient() {
+  const doctorId = sessionStorage.getItem("doctorId");
+  if (!doctorId) {
+    document.getElementById("dash-patient-name").textContent = "Patient Name: —";
+    document.getElementById("dash-patient-age").textContent = "Patient Age: —";
+    document.getElementById("dash-patient-id").textContent = "Patient ID: —";
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/patient/active?doctorId=${doctorId}`);
+    if (!res.ok) throw new Error("No active patient");
+    const p = await res.json();
+
+    document.getElementById("dash-patient-name").textContent =
+      "Patient Name: " + (p.name || "—");
+    document.getElementById("dash-patient-age").textContent =
+      "Patient Age: " + (p.age || "—");
+    document.getElementById("dash-patient-id").textContent =
+      "Patient ID: " + (p.patientId || "—");
+    sessionStorage.setItem("patientId", p.patientId);
+
+    // Prefer lastVitals from /active; otherwise query by patientId
+    let v = p.lastVitals;
+    if (!v) {
+      v = await fetchLatestVitalsForPatient(p.patientId);
+    }
+    applyLastVitals(v);
+  } catch (err) {
+    console.log(err);
+    document.getElementById("dash-patient-name").textContent = "Patient Name: —";
+    document.getElementById("dash-patient-age").textContent = "Patient Age: —";
+    document.getElementById("dash-patient-id").textContent = "Patient ID: —";
+
+    // Still try session patientId (Vercel-friendly)
+    const patientId = sessionStorage.getItem("patientId");
+    if (patientId) {
+      const v = await fetchLatestVitalsForPatient(patientId);
+      applyLastVitals(v);
+    }
+  }
+}
+
+// --- When no live MQTT for 10s, show last DB readings again ---
+let lastMqttAt = 0;
+
+setInterval(async () => {
+  if (typeof mode !== "undefined" && mode !== "live") return;
+  if (lastMqttAt && Date.now() - lastMqttAt < 10000) return;
+
+  const patientId = sessionStorage.getItem("patientId");
+  if (!patientId) return;
+
+  const v = await fetchLatestVitalsForPatient(patientId);
+  applyLastVitals(v);
+}, 15000);
 
         // Dashboard search
         const searchInput = document.getElementById('dash-patient-search');
