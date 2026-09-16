@@ -2324,7 +2324,7 @@
                     });
                     ecgChart.update('none');
                 } else if (topic === 'patient/data') {
-                    lasMqttAt = Date.now();
+                    lastMqttAt = Date.now();
                     updateCards(data);
                     updateSpO2Chart(data.spo2);
                     updateEnvironmentChart(data.temperature, data.humidity);
